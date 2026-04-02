@@ -1,3 +1,5 @@
+// App.tsx
+
 import React, { useEffect, useState } from 'react';
 import {
   View,
@@ -6,28 +8,57 @@ import {
   ActivityIndicator,
   TouchableOpacity,
 } from 'react-native';
+import { NavigationContainer } from '@react-navigation/native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import {
+  useFonts,
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
+  Inter_700Bold,
+} from '@expo-google-fonts/inter';
 
-import db, { initializeDatabase } from './src/db';
-import seedDatabase from './src/db/seed';
+import db, { initializeDatabase } from '@/db';
+import seedDatabase from '@/db/seed';
+import RootNavigator from '@/navigation';
+import { ThemeProvider, useTheme } from '@/theme';
 
 type AppState = 'loading' | 'ready' | 'error';
 
-export default function App() {
+function AppContent() {
   const [appState, setAppState] = useState<AppState>('loading');
   const [retryKey, setRetryKey] = useState(0);
+  const theme = useTheme();
+
+  const [fontsLoaded] = useFonts({
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    Inter_700Bold,
+  });
 
   useEffect(() => {
     let isMounted = true;
 
     async function initialize() {
       try {
-        if (isMounted) setAppState('loading');
+        if (isMounted) {
+          setAppState('loading');
+        }
+
         await initializeDatabase();
         await seedDatabase(db);
-        if (isMounted) setAppState('ready');
+
+        if (isMounted) {
+          setAppState('ready');
+        }
       } catch (error) {
         console.error('[App] Initialization failed:', error);
-        if (isMounted) setAppState('error');
+
+        if (isMounted) {
+          setAppState('error');
+        }
       }
     }
 
@@ -38,77 +69,112 @@ export default function App() {
     };
   }, [retryKey]);
 
-  if (appState === 'loading') {
+  if (!fontsLoaded || appState === 'loading') {
     return (
-      <View style={styles.container}>
-        <Text style={styles.appName}>Tavi</Text>
-        <ActivityIndicator size="small" color="#38BFA7" style={styles.spinner} />
+      <View
+        style={[
+          styles.centered,
+          {
+            backgroundColor: theme.colors.brand,
+            padding: theme.spacing.xl,
+          },
+        ]}
+      >
+        <Text
+          style={{
+            color: theme.colors.textInverse,
+            fontSize: theme.typography.fontSize.display,
+            lineHeight: theme.typography.lineHeight.display,
+            fontFamily: theme.typography.fontFamily.bold,
+            letterSpacing: theme.typography.letterSpacing.normal,
+          }}
+        >
+          Tavi
+        </Text>
+
+        <ActivityIndicator
+          size="small"
+          color={theme.colors.textInverse}
+          style={{ marginTop: theme.spacing.base }}
+        />
       </View>
     );
   }
 
   if (appState === 'error') {
     return (
-      <View style={styles.container}>
-        <Text style={styles.errorText}>
+      <View
+        style={[
+          styles.centered,
+          {
+            backgroundColor: theme.colors.brand,
+            padding: theme.spacing.xl,
+          },
+        ]}
+      >
+        <Text
+          style={{
+            color: theme.colors.textInverse,
+            fontSize: theme.typography.fontSize.bodyLarge,
+            lineHeight: theme.typography.lineHeight.bodyLarge,
+            fontFamily: theme.typography.fontFamily.medium,
+            textAlign: 'center',
+            marginBottom: theme.spacing.lg,
+          }}
+        >
           Something went wrong. Please restart the app.
         </Text>
+
         <TouchableOpacity
-          style={styles.restartButton}
           onPress={() => setRetryKey((k) => k + 1)}
+          style={{
+            backgroundColor: theme.colors.accentMain,
+            paddingHorizontal: theme.spacing.xl,
+            paddingVertical: theme.spacing.md,
+            borderRadius: theme.radius.medium,
+          }}
         >
-          <Text style={styles.restartButtonText}>Restart</Text>
+          <Text
+            style={{
+              color: theme.colors.textInverse,
+              fontSize: theme.typography.fontSize.body,
+              lineHeight: theme.typography.lineHeight.body,
+              fontFamily: theme.typography.fontFamily.semibold,
+            }}
+          >
+            Restart
+          </Text>
         </TouchableOpacity>
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.appName}>Tavi</Text>
-      <Text style={styles.readyText}>Database ready</Text>
-    </View>
+    <NavigationContainer>
+      <RootNavigator />
+    </NavigationContainer>
+  );
+}
+
+export default function App() {
+  return (
+    <GestureHandlerRootView style={styles.root}>
+      <SafeAreaProvider>
+        <ThemeProvider>
+          <AppContent />
+        </ThemeProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  root: {
     flex: 1,
-    backgroundColor: '#1B2B4B',
+  },
+  centered: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  appName: {
-    color: '#FFFFFF',
-    fontSize: 36,
-    fontWeight: '700',
-    letterSpacing: 1,
-    marginBottom: 16,
-  },
-  spinner: {
-    marginTop: 8,
-  },
-  readyText: {
-    color: '#38BFA7',
-    fontSize: 14,
-    marginTop: 8,
-  },
-  errorText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    textAlign: 'center',
-    marginHorizontal: 32,
-    marginBottom: 24,
-  },
-  restartButton: {
-    backgroundColor: '#38BFA7',
-    paddingHorizontal: 32,
-    paddingVertical: 12,
-    borderRadius: 8,
-  },
-  restartButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
   },
 });
