@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1775135700340,
+      "tag": "0000_many_outlaw_kid",
+      "breakpoints": true
+    }
+  ]
+}
