@@ -1,4 +1,3 @@
-// App.tsx
 
 import React, { useEffect, useState } from 'react';
 import {
@@ -49,7 +48,7 @@ function AppContent() {
 
         await initializeDatabase();
         await seedDatabase(db);
-
+  
         if (isMounted) {
           setAppState('ready');
         }
