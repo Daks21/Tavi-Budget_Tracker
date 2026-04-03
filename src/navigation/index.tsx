@@ -1,44 +1,53 @@
-import React, { useEffect, useState } from 'react';
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
-import db from '../db';
-import { userProfile } from '../db/schema';
-import OnboardingStack from './stacks/OnboardingStack';
-import TabNavigator from './TabNavigator';
+import { OnboardingCompleteProvider } from '@/context/OnboardingCompleteContext';
+import db from '@/db';
+import { userProfile } from '@/db/schema';
+import OnboardingStack from '@/navigation/stacks/OnboardingStack';
+import TabNavigator from '@/navigation/TabNavigator';
 
-type NavState = 'loading' | 'onboarding' | 'main';
+type OnboardingState = boolean | null;
+// null  = still checking DB
+// false = show onboarding
+// true  = show tabs
 
 export default function RootNavigator() {
-  const [navState, setNavState] = useState<NavState>('loading');
+  const [isOnboardingComplete, setIsOnboardingComplete] =
+    useState<OnboardingState>(null);
 
   useEffect(() => {
-    let isMounted = true;
+    let cancelled = false;
 
-    async function checkOnboarding() {
+    async function checkOnboardingStatus() {
       try {
-        const profiles = await db.select().from(userProfile).limit(1);
+        const rows = await db.select().from(userProfile).limit(1);
+        const done = rows.length > 0 && rows[0].onboarding_done === 1;
 
-        if (!isMounted) return;
-
-        if (profiles.length === 0 || profiles[0].onboarding_done === 0) {
-          setNavState('onboarding');
-        } else {
-          setNavState('main');
+        if (!cancelled) {
+          setIsOnboardingComplete(done);
         }
       } catch (error) {
-        console.error('[Nav] Failed to check onboarding state:', error);
-        if (isMounted) setNavState('onboarding');
+        console.warn('[RootNavigator] Could not read userProfile:', error);
+
+        if (!cancelled) {
+          setIsOnboardingComplete(false);
+        }
       }
     }
 
-    checkOnboarding();
+    checkOnboardingStatus();
 
     return () => {
-      isMounted = false;
+      cancelled = true;
     };
   }, []);
 
-  if (navState === 'loading') {
+  const completeOnboarding = useCallback(() => {
+    setIsOnboardingComplete(true);
+  }, []);
+
+  if (isOnboardingComplete === null) {
     return (
       <View style={styles.loading}>
         <ActivityIndicator size="small" color="#38BFA7" />
@@ -46,8 +55,12 @@ export default function RootNavigator() {
     );
   }
 
-  if (navState === 'onboarding') {
-    return <OnboardingStack />;
+  if (isOnboardingComplete === false) {
+    return (
+      <OnboardingCompleteProvider value={{ completeOnboarding }}>
+        <OnboardingStack />
+      </OnboardingCompleteProvider>
+    );
   }
 
   return <TabNavigator />;
