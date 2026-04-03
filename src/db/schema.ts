@@ -1,3 +1,5 @@
+// src/db/schema.ts
+
 import {
   integer,
   real,

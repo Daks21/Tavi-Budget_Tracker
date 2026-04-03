@@ -20,6 +20,7 @@ export type WalletStackParamList = {
   AddWallet: undefined;
   EditWallet: { accountId: number };
   Transfer: { fromAccountId?: number };
+  TransactionList: { accountId: number };
 };
 
 export type LogStackParamList = {

@@ -1,3 +1,4 @@
+// app.tsx
 
 import React, { useEffect, useState } from 'react';
 import {
@@ -7,6 +8,8 @@ import {
   ActivityIndicator,
   TouchableOpacity,
 } from 'react-native';
+import useWalletStore from '@/store/useWalletStore';
+import { userProfile } from '@/db/schema';
 import { NavigationContainer } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -29,6 +32,9 @@ function AppContent() {
   const [appState, setAppState] = useState<AppState>('loading');
   const [retryKey, setRetryKey] = useState(0);
   const theme = useTheme();
+  const initializePrivacyMode = useWalletStore(
+    (state) => state.initializePrivacyMode
+  );
 
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
@@ -40,33 +46,42 @@ function AppContent() {
   useEffect(() => {
     let isMounted = true;
 
-    async function initialize() {
-      try {
-        if (isMounted) {
-          setAppState('loading');
-        }
+  async function initialize() {
+    try {
+      if (isMounted) {
+        setAppState('loading');
+      }
 
-        await initializeDatabase();
-        await seedDatabase(db);
-  
-        if (isMounted) {
-          setAppState('ready');
-        }
-      } catch (error) {
-        console.error('[App] Initialization failed:', error);
+      await initializeDatabase();
+      await seedDatabase(db);
 
-        if (isMounted) {
-          setAppState('error');
-        }
+      const existingProfiles = await db.select().from(userProfile).limit(1);
+
+      const privacyModeFromDb =
+        existingProfiles.length > 0
+          ? existingProfiles[0].privacy_mode === 1
+          : false;
+
+      initializePrivacyMode(privacyModeFromDb);
+
+      if (isMounted) {
+        setAppState('ready');
+      }
+    } catch (error) {
+      console.error('[App] Initialization failed:', error);
+
+      if (isMounted) {
+        setAppState('error');
       }
     }
+  }
 
     initialize();
 
     return () => {
       isMounted = false;
     };
-  }, [retryKey]);
+  }, [retryKey, initializePrivacyMode]);
 
   if (!fontsLoaded || appState === 'loading') {
     return (

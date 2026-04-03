@@ -1,4 +1,4 @@
-// src/theme/index.ts
+// src/theme/index.tsx
 
 import React, {
   createContext,

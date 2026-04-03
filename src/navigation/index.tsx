@@ -1,3 +1,5 @@
+// src/navigation/index.ts
+
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 

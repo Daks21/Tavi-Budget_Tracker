@@ -1,3 +1,5 @@
+// src/navigation/stacks/WalletStack.tsx
+
 import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import type { WalletStackParamList } from '../../types/navigation';
