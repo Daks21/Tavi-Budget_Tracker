@@ -1,6 +1,6 @@
 // src/screens/log/TransactionHistoryScreen.tsx
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -22,9 +22,13 @@ import useTransactionStore, {
   type TransactionHistoryFilter,
 } from '@/store/useTransactionStore';
 import { formatCurrency } from '@/utils/formatCurrency';
-import type { Transaction } from '@/db/schema';
+import type { Transaction, Account, Category } from '@/db/schema';
 import db from '@/db';
 import { categories } from '@/db/schema';
+import AccountPicker from '@/components/common/AccountPicker';
+import CategoryPicker from '@/components/common/CategoryPicker';
+import CalendarView, { type TransactionSums } from '@/components/log/CalendarView';
+import DayDetailSheet from '@/components/log/DayDetailSheet';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES
@@ -263,7 +267,19 @@ function SectionHeader({ title, theme }: { title: string; theme: Theme }) {
   );
 }
 
-function EmptyState({ theme }: { theme: Theme }) {
+function EmptyState({
+  theme,
+  hasFilters,
+  onClearFilters,
+}: {
+  theme: Theme;
+  hasFilters: boolean;
+  onClearFilters: () => void;
+}) {
+  const icon = hasFilters ? 'search-outline' : 'receipt-outline';
+  const title = hasFilters ? 'No transactions found' : 'Nothing logged yet';
+  const subtitle = hasFilters ? 'No transactions match your filters.' : 'Start logging from the home screen.';
+
   return (
     <View
       style={{
@@ -271,11 +287,12 @@ function EmptyState({ theme }: { theme: Theme }) {
         alignItems: 'center',
         justifyContent: 'center',
         paddingTop: 80,
+        paddingHorizontal: theme.spacing.base,
         gap: theme.spacing.sm,
       }}
     >
       <Ionicons
-        name="receipt-outline"
+        name={icon}
         size={48}
         color={theme.colors.textDisabled}
       />
@@ -285,39 +302,95 @@ function EmptyState({ theme }: { theme: Theme }) {
           fontSize: theme.typography.fontSize.bodyLarge,
           fontFamily: theme.typography.fontFamily.semibold,
           marginTop: theme.spacing.sm,
+          textAlign: 'center',
         }}
       >
-        No transactions yet.
+        {title}
       </Text>
       <Text
         style={{
           color: theme.colors.textSecondary,
           fontSize: theme.typography.fontSize.body,
           fontFamily: theme.typography.fontFamily.regular,
+          textAlign: 'center',
         }}
       >
-        Start logging...
+        {subtitle}
       </Text>
+      {hasFilters && (
+        <TouchableOpacity
+          onPress={onClearFilters}
+          style={{ marginTop: theme.spacing.sm }}
+        >
+          <Text
+            style={{
+              color: theme.colors.accentMain,
+              fontSize: theme.typography.fontSize.body,
+              fontFamily: theme.typography.fontFamily.medium,
+            }}
+          >
+            Clear filters
+          </Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
 
 function ListFooter({
   isLoadingMore,
+  hasMore,
   theme,
+  onLoadMore,
 }: {
   isLoadingMore: boolean;
+  hasMore: boolean;
   theme: Theme;
+  onLoadMore: () => void;
 }) {
-  if (!isLoadingMore) return null;
+  if (!hasMore && !isLoadingMore) return null;
+
+  if (isLoadingMore) {
+    return (
+      <View
+        style={{
+          paddingVertical: theme.spacing.lg,
+          alignItems: 'center',
+        }}
+      >
+        <ActivityIndicator size="small" color={theme.colors.accentMain} />
+      </View>
+    );
+  }
+
   return (
     <View
       style={{
         paddingVertical: theme.spacing.lg,
         alignItems: 'center',
+        paddingHorizontal: theme.spacing.base,
       }}
     >
-      <ActivityIndicator size="small" color={theme.colors.accentMain} />
+      <TouchableOpacity
+        onPress={onLoadMore}
+        style={{
+          paddingVertical: theme.spacing.sm,
+          paddingHorizontal: theme.spacing.md,
+          borderWidth: 1,
+          borderColor: theme.colors.border,
+          borderRadius: theme.radius.small,
+        }}
+      >
+        <Text
+          style={{
+            color: theme.colors.textSecondary,
+            fontSize: theme.typography.fontSize.body,
+            fontFamily: theme.typography.fontFamily.medium,
+          }}
+        >
+          Load more
+        </Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -331,31 +404,121 @@ export default function TransactionHistoryScreen({ navigation }: Props) {
 
   const styles = useMemo(() => makeStyles(theme), [theme]);
 
-  const [typeFilter, setTypeFilter] = useState<TransactionHistoryFilter['typeFilter']>('all');
-  const [dateRangeStart, setDateRangeStart] = useState<string | null>(null);
-  const [dateRangeEnd,   setDateRangeEnd]   = useState<string | null>(null);
+  // View mode: list or calendar
+  const [viewMode, setViewMode] = useState<'list' | 'calendar'>('list');
 
-  // Date range modal state
-  const [dateModalVisible, setDateModalVisible] = useState(false);
+  // Type filter
+  const [typeFilter, setTypeFilter] = useState<TransactionHistoryFilter['typeFilter']>('all');
+
+  // Account and category filters
+  const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
+  const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
+
+  // Date range filters
+  const [dateRangeStart, setDateRangeStart] = useState<string | null>(null);
+  const [dateRangeEnd, setDateRangeEnd] = useState<string | null>(null);
+
+  // Search
+  const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Filter sheet modal state
+  const [filterSheetVisible, setFilterSheetVisible] = useState(false);
   const [pendingStart, setPendingStart] = useState('');
-  const [pendingEnd,   setPendingEnd]   = useState('');
+  const [pendingEnd, setPendingEnd] = useState('');
+  const [pendingAccountId, setPendingAccountId] = useState<number | null>(null);
+  const [pendingCategoryId, setPendingCategoryId] = useState<number | null>(null);
+
+  // Picker modals
+  const [accountPickerVisible, setAccountPickerVisible] = useState(false);
+  const [categoryPickerVisible, setCategoryPickerVisible] = useState(false);
 
   // Local category map: id -> name
   const [categoryMap, setCategoryMap] = useState<Record<number, string>>({});
+  const [accountMap, setAccountMap] = useState<Record<number, Account>>({});
+
+  // Calendar view state
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const now = new Date();
+    return now.getMonth() + 1; // 1-12
+  });
+
+  const [calendarYear, setCalendarYear] = useState(() => {
+    return new Date().getFullYear();
+  });
+
+  const [calendarSelectedDate, setCalendarSelectedDate] = useState<string | null>(null);
+  const [dayDetailVisible, setDayDetailVisible] = useState(false);
+  const [calendarTransactionSums, setCalendarTransactionSums] = useState<
+    Map<string, TransactionSums>
+  >(new Map());
+  const [isLoadingCalendar, setIsLoadingCalendar] = useState(false);
 
   const {
     allTransactions,
-    isLoadingAll,
+    isLoadingFiltered,
     isLoadingMore,
-    hasMore,
-    loadAllTransactions,
+    hasMorePages,
+    loadTransactionPage,
+    setFilters,
+    clearFilters,
     loadMoreTransactions,
   } = useTransactionStore();
 
-  // Reload when any filter changes
+  // Debounce search query
   useEffect(() => {
-    loadAllTransactions({ typeFilter, dateRangeStart, dateRangeEnd });
-  }, [typeFilter, dateRangeStart, dateRangeEnd]);
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+    searchTimeoutRef.current = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 400);
+
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+    };
+  }, [searchQuery]);
+
+  // Load wallets/accounts for the map
+  useEffect(() => {
+    const wallets = useTransactionStore.getState().allTransactions || [];
+    // Wallets info would come from useWalletStore, but for now we'll load from transactions
+  }, []);
+
+  // Load calendar month data
+  useEffect(() => {
+    const loadCalendarData = async () => {
+      setIsLoadingCalendar(true);
+      try {
+        const sums = await useTransactionStore
+          .getState()
+          .getTransactionSumsByMonth(calendarMonth, calendarYear);
+        setCalendarTransactionSums(sums);
+      } catch (error) {
+        console.error('Failed to load calendar data:', error);
+        setCalendarTransactionSums(new Map());
+      } finally {
+        setIsLoadingCalendar(false);
+      }
+    };
+
+    loadCalendarData();
+  }, [calendarMonth, calendarYear]);
+
+  // Reload when any filter changes (including debounced search)
+  useEffect(() => {
+    setFilters({
+      typeFilter,
+      accountId: selectedAccountId,
+      categoryId: selectedCategoryId,
+      dateStart: dateRangeStart,
+      dateEnd: dateRangeEnd,
+      searchQuery: debouncedSearchQuery,
+    });
+  }, [typeFilter, selectedAccountId, selectedCategoryId, dateRangeStart, dateRangeEnd, debouncedSearchQuery, setFilters]);
 
   // Load category names for the visible transactions
   useEffect(() => {
@@ -388,10 +551,10 @@ export default function TransactionHistoryScreen({ navigation }: Props) {
   const sections = useMemo(() => groupByDate(allTransactions), [allTransactions]);
 
   const handleEndReached = useCallback(() => {
-    if (hasMore && !isLoadingMore && !isLoadingAll) {
+    if (hasMorePages && !isLoadingMore && !isLoadingFiltered) {
       loadMoreTransactions();
     }
-  }, [hasMore, isLoadingMore, isLoadingAll, loadMoreTransactions]);
+  }, [hasMorePages, isLoadingMore, isLoadingFiltered, loadMoreTransactions]);
 
   const handleRowPress = useCallback(
     (transactionId: number) => {
@@ -400,40 +563,60 @@ export default function TransactionHistoryScreen({ navigation }: Props) {
     [navigation],
   );
 
-  // ── Date range modal handlers ──────────────────────────────────────────────
+  // ── Filter sheet handlers ──────────────────────────────────────────────
 
-  const openDateModal = useCallback(() => {
+  const openFilterSheet = useCallback(() => {
     setPendingStart(dateRangeStart ?? '');
     setPendingEnd(dateRangeEnd ?? '');
-    setDateModalVisible(true);
-  }, [dateRangeStart, dateRangeEnd]);
+    setPendingAccountId(selectedAccountId);
+    setPendingCategoryId(selectedCategoryId);
+    setFilterSheetVisible(true);
+  }, [dateRangeStart, dateRangeEnd, selectedAccountId, selectedCategoryId]);
 
-  const applyDateRange = useCallback(() => {
+  const applyFilters = useCallback(() => {
     setDateRangeStart(pendingStart.trim() || null);
     setDateRangeEnd(pendingEnd.trim() || null);
-    setDateModalVisible(false);
-  }, [pendingStart, pendingEnd]);
+    setSelectedAccountId(pendingAccountId);
+    setSelectedCategoryId(pendingCategoryId);
+    setFilterSheetVisible(false);
+  }, [pendingStart, pendingEnd, pendingAccountId, pendingCategoryId]);
 
-  const clearDateRange = useCallback(() => {
+  const clearAllFilters = useCallback(() => {
+    setTypeFilter('all');
+    setSelectedAccountId(null);
+    setSelectedCategoryId(null);
     setDateRangeStart(null);
     setDateRangeEnd(null);
-    setPendingStart('');
-    setPendingEnd('');
-    setDateModalVisible(false);
-  }, []);
+    setSearchQuery('');
+    setFilterSheetVisible(false);
+    clearFilters();
+  }, [clearFilters]);
 
-  const hasDateFilter = Boolean(dateRangeStart || dateRangeEnd);
+  const hasAdvancedFilters = Boolean(
+    selectedAccountId || selectedCategoryId || dateRangeStart || dateRangeEnd || searchQuery
+  );
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Header */}
+      {/* Header with title and view toggle */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Transactions</Text>
+        <TouchableOpacity
+          onPress={() => setViewMode(viewMode === 'list' ? 'calendar' : 'list')}
+          style={styles.viewToggle}
+          accessibilityLabel={`Switch to ${viewMode === 'list' ? 'calendar' : 'list'} view`}
+        >
+          <Ionicons
+            name={viewMode === 'list' ? 'calendar-outline' : 'list-outline'}
+            size={24}
+            color={theme.colors.textPrimary}
+          />
+        </TouchableOpacity>
       </View>
 
-      {/* Filter chips + date range icon in same row */}
+      {/* Filter chips row */}
       <View style={styles.filterRow}>
         {FILTER_CHIPS.map((chip) => {
           const active = chip.value === typeFilter;
@@ -460,24 +643,64 @@ export default function TransactionHistoryScreen({ navigation }: Props) {
         })}
 
         <TouchableOpacity
-          onPress={openDateModal}
-          style={[styles.dateIconButton, hasDateFilter && styles.dateIconButtonActive]}
-          accessibilityLabel="Filter by date range"
+          onPress={openFilterSheet}
+          style={[
+            styles.advancedFilterButton,
+            hasAdvancedFilters && styles.advancedFilterButtonActive,
+          ]}
+          accessibilityLabel="Advanced filters"
         >
           <Ionicons
-            name="calendar-outline"
-            size={20}
-            color={hasDateFilter ? theme.colors.accentMain : theme.colors.textSecondary}
+            name="funnel-outline"
+            size={18}
+            color={hasAdvancedFilters ? theme.colors.accentMain : theme.colors.textSecondary}
           />
+          <Text
+            style={[
+              styles.advancedFilterText,
+              hasAdvancedFilters && styles.advancedFilterTextActive,
+            ]}
+          >
+            Filter
+          </Text>
         </TouchableOpacity>
       </View>
 
+      {/* Search bar */}
+      <View style={styles.searchContainer}>
+        <Ionicons
+          name="search-outline"
+          size={20}
+          color={theme.colors.textSecondary}
+          style={{ marginRight: theme.spacing.xs }}
+        />
+        <TextInput
+          placeholder="Search transactions..."
+          placeholderTextColor={theme.colors.textDisabled}
+          style={styles.searchInput}
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+        />
+        {searchQuery.length > 0 && (
+          <TouchableOpacity
+            onPress={() => setSearchQuery('')}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Ionicons
+              name="close-circle-outline"
+              size={18}
+              color={theme.colors.textSecondary}
+            />
+          </TouchableOpacity>
+        )}
+      </View>
+
       {/* Full-screen loader on first load */}
-      {isLoadingAll ? (
+      {isLoadingFiltered ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={theme.colors.accentMain} />
         </View>
-      ) : (
+      ) : viewMode === 'list' ? (
         <SectionList
           sections={sections}
           keyExtractor={(item) => String(item.id)}
@@ -496,9 +719,20 @@ export default function TransactionHistoryScreen({ navigation }: Props) {
           renderSectionHeader={({ section }) => (
             <SectionHeader title={section.title} theme={theme} />
           )}
-          ListEmptyComponent={<EmptyState theme={theme} />}
+          ListEmptyComponent={
+            <EmptyState
+              theme={theme}
+              hasFilters={hasAdvancedFilters}
+              onClearFilters={clearAllFilters}
+            />
+          }
           ListFooterComponent={
-            <ListFooter isLoadingMore={isLoadingMore} theme={theme} />
+            <ListFooter
+              isLoadingMore={isLoadingMore}
+              hasMore={hasMorePages}
+              theme={theme}
+              onLoadMore={handleEndReached}
+            />
           }
           onEndReached={handleEndReached}
           onEndReachedThreshold={0.3}
@@ -507,65 +741,171 @@ export default function TransactionHistoryScreen({ navigation }: Props) {
             sections.length === 0 ? styles.emptyContent : undefined
           }
         />
+      ) : (
+        /* Calendar view */
+        <>
+          <CalendarView
+            month={calendarMonth}
+            year={calendarYear}
+            onMonthChange={(newMonth, newYear) => {
+              setCalendarMonth(newMonth);
+              setCalendarYear(newYear);
+            }}
+            onDaySelect={(dateString) => {
+              setCalendarSelectedDate(dateString);
+              setDayDetailVisible(true);
+            }}
+            selectedDate={calendarSelectedDate}
+            transactionSums={calendarTransactionSums}
+            isLoading={isLoadingCalendar}
+          />
+
+          <DayDetailSheet
+            visible={dayDetailVisible}
+            selectedDate={calendarSelectedDate}
+            onClose={() => setDayDetailVisible(false)}
+          />
+        </>
       )}
 
-      {/* Date range modal */}
+      {/* Filter Sheet Modal */}
       <Modal
-        visible={dateModalVisible}
+        visible={filterSheetVisible}
         transparent
-        animationType="fade"
-        onRequestClose={() => setDateModalVisible(false)}
+        animationType="slide"
+        onRequestClose={() => setFilterSheetVisible(false)}
       >
         <TouchableOpacity
-          style={styles.modalOverlay}
+          style={styles.filterSheetOverlay}
           activeOpacity={1}
-          onPress={() => setDateModalVisible(false)}
+          onPress={() => setFilterSheetVisible(false)}
         >
-          {/* Inner touchable stops tap-through so tapping the card doesn't close */}
-          <TouchableOpacity activeOpacity={1} style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Date Range</Text>
-
-            <Text style={styles.modalLabel}>Start date</Text>
-            <TextInput
-              value={pendingStart}
-              onChangeText={setPendingStart}
-              placeholder="YYYY-MM-DD"
-              placeholderTextColor={theme.colors.textDisabled}
-              style={styles.modalInput}
-              keyboardType="numeric"
-              maxLength={10}
-              autoCorrect={false}
-            />
-
-            <Text style={styles.modalLabel}>End date</Text>
-            <TextInput
-              value={pendingEnd}
-              onChangeText={setPendingEnd}
-              placeholder="YYYY-MM-DD"
-              placeholderTextColor={theme.colors.textDisabled}
-              style={styles.modalInput}
-              keyboardType="numeric"
-              maxLength={10}
-              autoCorrect={false}
-            />
-
-            <View style={styles.modalActions}>
+          <TouchableOpacity
+            activeOpacity={1}
+            style={styles.filterSheet}
+            onPress={(e) => e.stopPropagation()}
+          >
+            {/* Sheet header */}
+            <View style={styles.filterSheetHeader}>
+              <Text style={styles.filterSheetTitle}>Filters</Text>
               <TouchableOpacity
-                onPress={clearDateRange}
-                style={[styles.modalBtn, styles.modalBtnOutline]}
+                onPress={() => setFilterSheetVisible(false)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
-                <Text style={styles.modalBtnOutlineText}>Clear</Text>
+                <Ionicons
+                  name="close-outline"
+                  size={24}
+                  color={theme.colors.textPrimary}
+                />
+              </TouchableOpacity>
+            </View>
+
+            {/* Scrollable content */}
+            <View style={styles.filterSheetContent}>
+              {/* Account filter */}
+              <View style={styles.filterSection}>
+                <Text style={styles.filterSectionLabel}>Account</Text>
+                <TouchableOpacity
+                  onPress={() => setAccountPickerVisible(true)}
+                  style={styles.filterSelectButton}
+                >
+                  <Text style={styles.filterSelectButtonText}>
+                    {pendingAccountId ? `Account ${pendingAccountId}` : 'All wallets'}
+                  </Text>
+                  <Ionicons
+                    name="chevron-forward-outline"
+                    size={18}
+                    color={theme.colors.textSecondary}
+                  />
+                </TouchableOpacity>
+              </View>
+
+              {/* Category filter */}
+              <View style={styles.filterSection}>
+                <Text style={styles.filterSectionLabel}>Category</Text>
+                <TouchableOpacity
+                  onPress={() => setCategoryPickerVisible(true)}
+                  style={styles.filterSelectButton}
+                >
+                  <Text style={styles.filterSelectButtonText}>
+                    {pendingCategoryId ? `Category ${pendingCategoryId}` : 'All categories'}
+                  </Text>
+                  <Ionicons
+                    name="chevron-forward-outline"
+                    size={18}
+                    color={theme.colors.textSecondary}
+                  />
+                </TouchableOpacity>
+              </View>
+
+              {/* Date range */}
+              <View style={styles.filterSection}>
+                <Text style={styles.filterSectionLabel}>Date Range</Text>
+                <View style={styles.dateRangeInputs}>
+                  <TextInput
+                    placeholder="From"
+                    placeholderTextColor={theme.colors.textDisabled}
+                    value={pendingStart}
+                    onChangeText={setPendingStart}
+                    style={[styles.dateRangeInput, { flex: 1 }]}
+                    keyboardType="numeric"
+                    maxLength={10}
+                  />
+                  <Text style={styles.dateRangeSeparator}>–</Text>
+                  <TextInput
+                    placeholder="To"
+                    placeholderTextColor={theme.colors.textDisabled}
+                    value={pendingEnd}
+                    onChangeText={setPendingEnd}
+                    style={[styles.dateRangeInput, { flex: 1 }]}
+                    keyboardType="numeric"
+                    maxLength={10}
+                  />
+                </View>
+              </View>
+            </View>
+
+            {/* Actions */}
+            <View style={styles.filterSheetActions}>
+              <TouchableOpacity
+                onPress={clearAllFilters}
+                style={[styles.filterSheetBtn, styles.filterSheetBtnOutline]}
+              >
+                <Text style={styles.filterSheetBtnOutlineText}>Reset</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                onPress={applyDateRange}
-                style={[styles.modalBtn, styles.modalBtnFill]}
+                onPress={applyFilters}
+                style={[styles.filterSheetBtn, styles.filterSheetBtnFill]}
               >
-                <Text style={styles.modalBtnFillText}>Apply</Text>
+                <Text style={styles.filterSheetBtnFillText}>Apply</Text>
               </TouchableOpacity>
             </View>
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
+      {/* Account Picker */}
+      <AccountPicker
+        visible={accountPickerVisible}
+        selectedAccountId={pendingAccountId}
+        onSelect={(account) => {
+          setPendingAccountId(account.id);
+          setAccountPickerVisible(false);
+        }}
+        onClose={() => setAccountPickerVisible(false)}
+      />
+
+      {/* Category Picker */}
+      <CategoryPicker
+        visible={categoryPickerVisible}
+        type="all"
+        selectedCategoryId={pendingCategoryId}
+        onSelect={(category) => {
+          setPendingCategoryId(category.id);
+          setCategoryPickerVisible(false);
+        }}
+        onClose={() => setCategoryPickerVisible(false)}
+      />
     </SafeAreaView>
   );
 }
@@ -583,6 +923,9 @@ function makeStyles(theme: Theme) {
 
     // Header
     header: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
       paddingHorizontal: theme.spacing.base,
       paddingTop: theme.spacing.sm,
       paddingBottom: theme.spacing.md,
@@ -592,6 +935,11 @@ function makeStyles(theme: Theme) {
       fontSize: theme.typography.fontSize.heading1,
       fontFamily: theme.typography.fontFamily.semibold,
       lineHeight: theme.typography.lineHeight.heading1,
+      flex: 1,
+    },
+    viewToggle: {
+      padding: theme.spacing.xs,
+      borderRadius: theme.radius.small,
     },
 
     // Filter chips row
@@ -599,8 +947,8 @@ function makeStyles(theme: Theme) {
       flexDirection: 'row',
       alignItems: 'center',
       paddingHorizontal: theme.spacing.base,
-      paddingBottom: theme.spacing.md,
-      gap: theme.spacing.sm,
+      paddingBottom: theme.spacing.sm,
+      gap: theme.spacing.xs,
     },
     chip: {
       paddingHorizontal: theme.spacing.md,
@@ -626,13 +974,48 @@ function makeStyles(theme: Theme) {
     chipTextInactive: {
       color: theme.colors.textSecondary,
     },
-    dateIconButton: {
+    // Advanced filter button
+    advancedFilterButton: {
       marginLeft: 'auto',
-      padding: theme.spacing.xs,
-      borderRadius: theme.radius.small,
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: theme.spacing.md,
+      paddingVertical: theme.spacing.xs + 2,
+      borderRadius: theme.radius.full,
+      gap: theme.spacing.xs,
     },
-    dateIconButtonActive: {
+    advancedFilterButtonActive: {
       backgroundColor: theme.colors.accentSubtle,
+    },
+    advancedFilterText: {
+      fontSize: theme.typography.fontSize.bodySmall,
+      fontFamily: theme.typography.fontFamily.medium,
+      color: theme.colors.textSecondary,
+    },
+    advancedFilterTextActive: {
+      color: theme.colors.accentMain,
+    },
+
+    // Search container
+    searchContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: theme.spacing.base,
+      paddingVertical: theme.spacing.xs,
+      marginHorizontal: theme.spacing.base,
+      marginBottom: theme.spacing.sm,
+      backgroundColor: theme.colors.bgCard,
+      borderRadius: theme.radius.medium,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    searchInput: {
+      flex: 1,
+      color: theme.colors.textPrimary,
+      fontSize: theme.typography.fontSize.body,
+      fontFamily: theme.typography.fontFamily.regular,
+      paddingVertical: theme.spacing.sm,
+      paddingHorizontal: theme.spacing.xs,
     },
 
     // Loading / empty
@@ -645,34 +1028,72 @@ function makeStyles(theme: Theme) {
       flexGrow: 1,
     },
 
-    // Date range modal
-    modalOverlay: {
+    // Filter sheet modal
+    filterSheetOverlay: {
       flex: 1,
       backgroundColor: 'rgba(0,0,0,0.45)',
-      justifyContent: 'center',
+      justifyContent: 'flex-end',
+    },
+    filterSheet: {
+      backgroundColor: theme.colors.bgCard,
+      borderTopLeftRadius: theme.radius.large,
+      borderTopRightRadius: theme.radius.large,
+      paddingTop: theme.spacing.base,
+      maxHeight: '80%',
+      ...theme.shadows.modal,
+    },
+    filterSheetHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
       alignItems: 'center',
       paddingHorizontal: theme.spacing.base,
+      paddingBottom: theme.spacing.base,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.colors.border,
     },
-    modalCard: {
-      width: '100%',
-      backgroundColor: theme.colors.bgCard,
-      borderRadius: theme.radius.medium,
-      padding: theme.spacing.base,
-      gap: theme.spacing.sm,
-    },
-    modalTitle: {
+    filterSheetTitle: {
       color: theme.colors.textPrimary,
       fontSize: theme.typography.fontSize.bodyLarge,
       fontFamily: theme.typography.fontFamily.semibold,
-      marginBottom: theme.spacing.xs,
     },
-    modalLabel: {
+    filterSheetContent: {
+      paddingHorizontal: theme.spacing.base,
+      paddingVertical: theme.spacing.md,
+    },
+    filterSection: {
+      marginBottom: theme.spacing.lg,
+    },
+    filterSectionLabel: {
       color: theme.colors.textSecondary,
       fontSize: theme.typography.fontSize.caption,
       fontFamily: theme.typography.fontFamily.medium,
-      marginTop: theme.spacing.xs,
+      marginBottom: theme.spacing.xs,
+      textTransform: 'uppercase',
+      letterSpacing: theme.typography.letterSpacing.label,
     },
-    modalInput: {
+    filterSelectButton: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: theme.spacing.md,
+      paddingVertical: theme.spacing.sm,
+      backgroundColor: theme.colors.bgPage,
+      borderRadius: theme.radius.small,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    filterSelectButtonText: {
+      color: theme.colors.textPrimary,
+      fontSize: theme.typography.fontSize.body,
+      fontFamily: theme.typography.fontFamily.regular,
+      flex: 1,
+    },
+    dateRangeInputs: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: theme.spacing.sm,
+    },
+    dateRangeInput: {
       color: theme.colors.textPrimary,
       fontSize: theme.typography.fontSize.body,
       fontFamily: theme.typography.fontFamily.regular,
@@ -681,31 +1102,40 @@ function makeStyles(theme: Theme) {
       borderRadius: theme.radius.small,
       paddingHorizontal: theme.spacing.md,
       paddingVertical: theme.spacing.sm,
+      backgroundColor: theme.colors.bgPage,
     },
-    modalActions: {
+    dateRangeSeparator: {
+      color: theme.colors.textSecondary,
+      fontSize: theme.typography.fontSize.body,
+    },
+    filterSheetActions: {
       flexDirection: 'row',
       gap: theme.spacing.sm,
-      marginTop: theme.spacing.sm,
+      paddingHorizontal: theme.spacing.base,
+      paddingBottom: theme.spacing.base,
+      borderTopWidth: 1,
+      borderTopColor: theme.colors.border,
+      paddingTop: theme.spacing.base,
     },
-    modalBtn: {
+    filterSheetBtn: {
       flex: 1,
       paddingVertical: theme.spacing.sm,
       borderRadius: theme.radius.small,
       alignItems: 'center',
     },
-    modalBtnOutline: {
+    filterSheetBtnOutline: {
       borderWidth: 1,
       borderColor: theme.colors.border,
     },
-    modalBtnFill: {
+    filterSheetBtnFill: {
       backgroundColor: theme.colors.brand,
     },
-    modalBtnOutlineText: {
+    filterSheetBtnOutlineText: {
       color: theme.colors.textSecondary,
       fontSize: theme.typography.fontSize.body,
       fontFamily: theme.typography.fontFamily.medium,
     },
-    modalBtnFillText: {
+    filterSheetBtnFillText: {
       color: theme.colors.textInverse,
       fontSize: theme.typography.fontSize.body,
       fontFamily: theme.typography.fontFamily.medium,

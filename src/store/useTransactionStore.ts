@@ -1,7 +1,8 @@
 // src/store/useTransactionStore.ts
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { and, desc, eq, gte, lte } from 'drizzle-orm';
+import { and, desc, eq, gte, lte, like, or } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { create } from 'zustand';
 
 import db from '@/db';
@@ -139,6 +140,19 @@ export interface TransactionHistoryFilter {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TRANSACTION FILTERS TYPE (for calendar & browseable history)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface TransactionFilters {
+  typeFilter: 'all' | 'income' | 'expense' | 'transfer';
+  accountId: number | null;
+  categoryId: number | null;
+  dateStart: string | null;
+  dateEnd: string | null;
+  searchQuery: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // STORE INTERFACE
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -154,6 +168,14 @@ interface TransactionStore {
   isLoadingAll: boolean;
   isLoadingMore: boolean;
   hasMore: boolean;
+
+  // ── Calendar/browseable history state ────────────────────────────────────
+  totalTransactionCount: number;
+  currentPage: number;
+  pageSize: number;
+  hasMorePages: boolean;
+  activeFilters: TransactionFilters;
+  isLoadingFiltered: boolean;
 
   // ── Internal pagination state ─────────────────────────────────────────────
   _allOffset: number;
@@ -176,6 +198,16 @@ interface TransactionStore {
   loadAllTransactions(filter: TransactionHistoryFilter): Promise<void>;
   loadMoreTransactions(): Promise<void>;
 
+  // ── Calendar/browseable history actions ──────────────────────────────────
+  loadTransactionPage(page: number, filters: TransactionFilters): Promise<void>;
+  setFilters(filters: Partial<TransactionFilters>): Promise<void>;
+  clearFilters(): Promise<void>;
+  getTransactionsByDate(date: string): Promise<Transaction[]>;
+  getTransactionSumsByMonth(
+    month: number,
+    year: number,
+  ): Promise<Map<string, { income: number; expense: number }>>;
+
   // ── Template actions ─────────────────────────────────────────────────────
   loadTemplates(): Promise<void>;
   saveTemplate(template: Omit<TransactionTemplate, 'id'>): Promise<void>;
@@ -190,6 +222,15 @@ interface TransactionStore {
 // STORE IMPLEMENTATION
 // ─────────────────────────────────────────────────────────────────────────────
 
+const DEFAULT_FILTERS: TransactionFilters = {
+  typeFilter: 'all',
+  accountId: null,
+  categoryId: null,
+  dateStart: null,
+  dateEnd: null,
+  searchQuery: '',
+};
+
 const useTransactionStore = create<TransactionStore>((set, get) => ({
   // ── Initial state ─────────────────────────────────────────────────────────
   recentTransactions: [],
@@ -200,6 +241,12 @@ const useTransactionStore = create<TransactionStore>((set, get) => ({
   isLoadingAll: false,
   isLoadingMore: false,
   hasMore: false,
+  totalTransactionCount: 0,
+  currentPage: 1,
+  pageSize: 30,
+  hasMorePages: false,
+  activeFilters: DEFAULT_FILTERS,
+  isLoadingFiltered: false,
   _allOffset: 0,
   _allFilter: null,
   _lastInsertedId: null,
@@ -498,6 +545,175 @@ const useTransactionStore = create<TransactionStore>((set, get) => ({
   // ─────────────────────────────────────────────────────────────────────────
   setLastEntryMode: (mode) => {
     set({ lastEntryMode: mode });
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // loadTransactionPage
+  //
+  // Loads a page of transactions with the given filters applied.
+  // Builds dynamic conditions based on filter values.
+  // If page = 1, replaces allTransactions.
+  // If page > 1, appends to allTransactions (continuation).
+  // Updates totalTransactionCount, currentPage, and hasMorePages.
+  // ─────────────────────────────────────────────────────────────────────────
+  loadTransactionPage: async (page, filters) => {
+    const { pageSize } = get();
+    set({ isLoadingFiltered: true, activeFilters: filters });
+
+    try {
+      const conditions = [eq(transactions.is_deleted, 0)];
+
+      if (filters.typeFilter !== 'all') {
+        conditions.push(eq(transactions.type, filters.typeFilter));
+      }
+
+      if (filters.accountId !== null) {
+        conditions.push(eq(transactions.account_id, filters.accountId));
+      }
+
+      if (filters.categoryId !== null) {
+        conditions.push(eq(transactions.category_id, filters.categoryId));
+      }
+
+      if (filters.dateStart !== null) {
+        conditions.push(gte(transactions.date, filters.dateStart));
+      }
+
+      if (filters.dateEnd !== null) {
+        conditions.push(lte(transactions.date, filters.dateEnd));
+      }
+
+      if (filters.searchQuery.trim() !== '') {
+        const query = `%${filters.searchQuery}%`;
+        conditions.push(
+          or(
+            like(transactions.description, query) || sql`1=1`,
+            like(transactions.notes, query) || sql`1=1`,
+          ) as any,
+        );
+      }
+
+      // Get total count
+      const countResult = await db
+        .select({ count: transactions.id })
+        .from(transactions)
+        .where(and(...conditions));
+      const totalCount = countResult.length;
+
+      // Get paginated rows
+      const offset = (page - 1) * pageSize;
+      const rows = await db
+        .select()
+        .from(transactions)
+        .where(and(...conditions))
+        .orderBy(desc(transactions.date), desc(transactions.created_at))
+        .limit(pageSize)
+        .offset(offset);
+
+      const hasMore = offset + rows.length < totalCount;
+
+      if (page === 1) {
+        set({
+          allTransactions: rows,
+          totalTransactionCount: totalCount,
+          currentPage: page,
+          hasMorePages: hasMore,
+        });
+      } else {
+        set((state) => ({
+          allTransactions: [...state.allTransactions, ...rows],
+          totalTransactionCount: totalCount,
+          currentPage: page,
+          hasMorePages: hasMore,
+        }));
+      }
+    } finally {
+      set({ isLoadingFiltered: false });
+    }
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // setFilters
+  //
+  // Merges new filters with activeFilters and resets to page 1.
+  // Calls loadTransactionPage(1, mergedFilters) to reload data.
+  // ─────────────────────────────────────────────────────────────────────────
+  setFilters: async (filters) => {
+    const { activeFilters } = get();
+    const mergedFilters = { ...activeFilters, ...filters };
+    await get().loadTransactionPage(1, mergedFilters);
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // clearFilters
+  //
+  // Resets activeFilters to defaults and reloads from page 1.
+  // ─────────────────────────────────────────────────────────────────────────
+  clearFilters: async () => {
+    await get().loadTransactionPage(1, DEFAULT_FILTERS);
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // getTransactionsByDate
+  //
+  // Returns all non-deleted transactions for a specific date.
+  // Used by calendar view day detail.
+  // ─────────────────────────────────────────────────────────────────────────
+  getTransactionsByDate: async (date) => {
+    const rows = await db
+      .select()
+      .from(transactions)
+      .where(and(eq(transactions.is_deleted, 0), eq(transactions.date, date)))
+      .orderBy(desc(transactions.created_at));
+    return rows;
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // getTransactionSumsByMonth
+  //
+  // Returns a Map where key = 'YYYY-MM-DD' date string.
+  // Value = { income: sum of income txns, expense: sum of expense txns }
+  // for every day in the given month that has transactions.
+  // Used to populate the calendar view indicators.
+  // ─────────────────────────────────────────────────────────────────────────
+  getTransactionSumsByMonth: async (month, year) => {
+    const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
+    // Calculate last day of month
+    const nextMonth = new Date(year, month, 1);
+    const lastDay = new Date(nextMonth.getTime() - 1).getDate();
+    const endDate = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+    const rows = await db
+      .select({
+        date: transactions.date,
+        type: transactions.type,
+        amount: transactions.amount,
+      })
+      .from(transactions)
+      .where(
+        and(
+          eq(transactions.is_deleted, 0),
+          gte(transactions.date, startDate),
+          lte(transactions.date, endDate),
+        ),
+      )
+      .orderBy(transactions.date);
+
+    const sums = new Map<string, { income: number; expense: number }>();
+
+    for (const row of rows) {
+      const existing = sums.get(row.date) || { income: 0, expense: 0 };
+
+      if (row.type === 'income') {
+        existing.income += row.amount;
+      } else if (row.type === 'expense') {
+        existing.expense += row.amount;
+      }
+
+      sums.set(row.date, existing);
+    }
+
+    return sums;
   },
 }));
 
