@@ -1,5 +1,5 @@
-// app.tsx
-
+//  app.tsx 
+ 
 import React, { useEffect, useState } from 'react';
 import {
   View,
