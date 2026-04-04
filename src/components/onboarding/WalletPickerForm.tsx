@@ -109,12 +109,17 @@ export default function WalletPickerForm({
         setCustomName(wallet.name);
       }
     } else {
-      // User has typed something — only overwrite if switching away from Other
-      // back to a known wallet (restores the expected name)
+      // User has typed something
       if (selectedWalletKey === OTHER_KEY && wallet.key !== OTHER_KEY) {
+        // Switching away from Other to a known wallet: restore the known name
         setCustomName(wallet.name);
         setNameWasCustomized(false);
+      } else if (wallet.key === OTHER_KEY && selectedWalletKey !== OTHER_KEY) {
+        // Switching back to Other from a known wallet: clear custom text for fresh input
+        setCustomName('');
+        setNameWasCustomized(false);
       }
+      // Otherwise: switching between known wallets or staying on same wallet, keep customName
     }
   };
 

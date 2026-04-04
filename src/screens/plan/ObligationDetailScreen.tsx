@@ -213,6 +213,63 @@ function makeStyles(theme: Theme) {
       color:      theme.colors.textInverse,
     },
 
+    // ── Progress card ──────────────────────────────────────────────────────────
+    progressCard: {
+      backgroundColor: theme.colors.bgCard,
+      borderRadius:    theme.radius.large,
+      padding:         theme.spacing.base,
+      marginBottom:    theme.spacing.base,
+      ...theme.shadows.card,
+    },
+    progressHeader: {
+      flexDirection:  'row',
+      justifyContent: 'space-between',
+      alignItems:     'center',
+      marginBottom:   theme.spacing.md,
+    },
+    progressLabel: {
+      fontSize:   theme.typography.fontSize.label,
+      fontFamily: theme.typography.fontFamily.semibold,
+      color:      theme.colors.textSecondary,
+      letterSpacing: theme.typography.letterSpacing.label,
+      textTransform: 'uppercase',
+    },
+    progressAmounts: {
+      flexDirection:  'row',
+      justifyContent: 'space-between',
+      marginBottom:   theme.spacing.md,
+      paddingHorizontal: theme.spacing.sm,
+    },
+    progressAmount: {
+      fontSize:   theme.typography.fontSize.body,
+      fontFamily: theme.typography.fontFamily.medium,
+      color:      theme.colors.textPrimary,
+    },
+    progressAmountLabel: {
+      fontSize:   theme.typography.fontSize.label,
+      fontFamily: theme.typography.fontFamily.regular,
+      color:      theme.colors.textSecondary,
+      marginTop:  theme.spacing.xs / 2,
+    },
+    progressBarContainer: {
+      height:       12,
+      backgroundColor: theme.colors.bgPage,
+      borderRadius: theme.radius.full,
+      overflow:     'hidden',
+      marginBottom: theme.spacing.md,
+    },
+    progressBarFilled: {
+      height:       '100%',
+      backgroundColor: theme.colors.successMain,
+      borderRadius: theme.radius.full,
+    },
+    progressMeta: {
+      textAlign:  'center',
+      fontSize:   theme.typography.fontSize.label,
+      fontFamily: theme.typography.fontFamily.regular,
+      color:      theme.colors.textSecondary,
+    },
+
     // ── Details card ───────────────────────────────────────────────────────────
     detailsCard: {
       backgroundColor: theme.colors.bgCard,
@@ -706,6 +763,69 @@ function DetailRow({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PROGRESS CARD
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ProgressCard({
+  obligation,
+  totalPaymentCount,
+  s,
+}: {
+  obligation: Obligation;
+  totalPaymentCount: number;
+  s: ReturnType<typeof makeStyles>;
+}) {
+  // Calculate amount paid: principal - remaining balance
+  const amountPaid = obligation.principal_amount
+    ? (obligation.principal_amount - (obligation.current_balance ?? 0))
+    : 0;
+
+  // Calculate progress percentage
+  let progressPercent = 0;
+  let progressLabel = '';
+
+  if (obligation.principal_amount && obligation.principal_amount > 0) {
+    progressPercent = Math.min(100, (amountPaid / obligation.principal_amount) * 100);
+    progressLabel = `${obligation.payments_made} of ${totalPaymentCount} payments made`;
+  } else if (totalPaymentCount > 0) {
+    progressPercent = Math.min(100, (obligation.payments_made / totalPaymentCount) * 100);
+    progressLabel = `${obligation.payments_made} of ${totalPaymentCount} payments made`;
+  }
+
+  const remaining = obligation.current_balance ?? 0;
+
+  return (
+    <View style={s.progressCard}>
+      <View style={s.progressHeader}>
+        <Text style={s.progressLabel}>Repayment Progress</Text>
+      </View>
+
+      <View style={s.progressAmounts}>
+        <View>
+          <Text style={s.progressAmount}>{formatCurrency(amountPaid)}</Text>
+          <Text style={s.progressAmountLabel}>paid</Text>
+        </View>
+        <View style={{ alignItems: 'flex-end' }}>
+          <Text style={s.progressAmount}>{formatCurrency(remaining)}</Text>
+          <Text style={s.progressAmountLabel}>remaining</Text>
+        </View>
+      </View>
+
+      <View style={s.progressBarContainer}>
+        <View
+          style={[
+            s.progressBarFilled,
+            { width: `${progressPercent}%` },
+          ]}
+        />
+      </View>
+
+      <Text style={s.progressMeta}>{progressLabel}</Text>
+    </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PAYMENT ROW
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -723,6 +843,7 @@ function PaymentRow({
   const today    = todayStr();
   const isPaid   = payment.is_paid === 1;
   const isOverdue = !isPaid && payment.scheduled_date < today;
+  const hasPartialPayment = !isPaid && payment.amount_paid && payment.amount_paid > 0;
 
   const iconName  = isPaid
     ? 'checkmark-circle'
@@ -734,16 +855,31 @@ function PaymentRow({
     ? theme.colors.successMain
     : isOverdue
     ? theme.colors.dangerMain
+    : hasPartialPayment
+    ? theme.colors.warningMain
     : theme.colors.textDisabled;
 
   return (
     <View style={[s.paymentRow, !isLast && s.paymentRowBorder]}>
-      <Text style={s.paymentDate}>{formatShortDate(payment.scheduled_date)}</Text>
-      <Text style={s.paymentAmount}>{formatCurrency(payment.amount_due)}</Text>
+      <View style={{ flex: 1 }}>
+        <Text style={s.paymentDate}>
+          {formatShortDate(payment.scheduled_date)}
+          {isPaid && payment.paid_date && ` • Paid ${formatShortDate(payment.paid_date)}`}
+        </Text>
+        {hasPartialPayment && (
+          <Text style={[s.paymentAmount, { color: theme.colors.warningMain, marginTop: 4 }]}>
+            {`Partial: ${formatCurrency(payment.amount_paid)} of ${formatCurrency(payment.amount_due)}`}
+          </Text>
+        )}
+      </View>
+      <Text style={s.paymentAmount}>
+        {isPaid ? formatCurrency(payment.amount_paid || payment.amount_due) : formatCurrency(payment.amount_due)}
+      </Text>
       <Ionicons
         name={iconName as React.ComponentProps<typeof Ionicons>['name']}
         size={20}
         color={iconColor}
+        style={{ marginLeft: theme.spacing.sm }}
       />
     </View>
   );
@@ -1309,6 +1445,13 @@ export default function ObligationDetailScreen({ navigation, route }: Props) {
             <Text style={s.markPaidBtnTxt}>Mark as Paid</Text>
           </TouchableOpacity>
         </View>
+
+        {/* ── Progress card ────────────────────────────────────────────────── */}
+        <ProgressCard
+          obligation={obligation}
+          totalPaymentCount={payments.length}
+          s={s}
+        />
 
         {/* ── Details ──────────────────────────────────────────────────────── */}
         <Text style={s.sectionLabel}>Details</Text>

@@ -31,13 +31,15 @@ import useTransactionStore, {
   type TransactionTemplate,
 } from '@/store/useTransactionStore';
 import useWalletStore from '@/store/useWalletStore';
-import { parseAmountInput } from '@/utils/formatCurrency';
+import useObligationStore from '@/store/useObligationStore';
+import { parseAmountInput, formatCurrency } from '@/utils/formatCurrency';
 import AccountPicker from '@/components/common/AccountPicker';
 import CategoryPicker from '@/components/common/CategoryPicker';
+import ObligationPicker from '@/components/common/ObligationPicker';
 import AmountInput from '@/components/common/AmountInput';
 import db from '@/db';
 import { transactions, categories as categoriesTable } from '@/db/schema';
-import type { Category } from '@/db/schema';
+import type { Category, Obligation } from '@/db/schema';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES
@@ -620,6 +622,10 @@ export default function QuickLogScreen({ route }: Props) {
   const [accPickerVisible,  setAccPickerVisible]  = useState(false);
   const [destPickerVisible, setDestPickerVisible] = useState(false);
   const [datePickerVisible, setDatePickerVisible] = useState(false);
+  const [obligPickerVisible, setObligPickerVisible] = useState(false);
+
+  // Obligation linking (for expense type)
+  const [selectedObligation, setSelectedObligation] = useState<Obligation | null>(null);
 
   const [isSaving,        setIsSaving]        = useState(false);
   const [showUndoToast,   setShowUndoToast]   = useState(false);
@@ -815,6 +821,19 @@ export default function QuickLogScreen({ route }: Props) {
 
   const handleSave = useCallback(async () => {
     if (isSaving || !isValid) return;
+
+    // Validate overpayment if obligation is selected
+    if (selectedObligation && txType === 'expense') {
+      const remaining = selectedObligation.current_balance ?? 0;
+      if (parsedAmount > remaining) {
+        Alert.alert(
+          'Too Much',
+          `You're paying more than the remaining balance of ${formatCurrency(remaining)}. Please enter ${formatCurrency(remaining)} or less.`,
+        );
+        return;
+      }
+    }
+
     setIsSaving(true);
 
     try {
@@ -888,15 +907,23 @@ export default function QuickLogScreen({ route }: Props) {
 
       } else {
         // ── Normal income / expense ───────────────────────────────────────
-        await addTransaction({
+        const txId = await addTransaction({
           date:        selectedDate,
           type:        txType,
           category_id: selectedCategory?.id ?? null,
           account_id:  selectedAccountId!,
           amount:      parsedAmount,
           description: description.trim() || null,
+          reference_id: selectedObligation ? `OBL-${selectedObligation.id}` : null,
           entry_mode:  'realtime',
         });
+
+        // Link expense to obligation if selected
+        if (selectedObligation && txType === 'expense') {
+          const applyPayment = useObligationStore.getState().applyPaymentToObligation;
+          await applyPayment(selectedObligation.id, parsedAmount, txId);
+          setSelectedObligation(null);
+        }
 
         await reloadAccounts();
         setLastEntryMode('realtime');
@@ -915,6 +942,7 @@ export default function QuickLogScreen({ route }: Props) {
     selectedAccountId, destinationAccountId,
     parsedAmount, selectedDate, description,
     selectedCategory, sourceAccount, destAccount,
+    selectedObligation,
     addTransaction, loadRecentTransactions, reloadAccounts,
     setLastEntryMode, showToastFor10s,
   ]);
@@ -1158,6 +1186,50 @@ export default function QuickLogScreen({ route }: Props) {
                 />
               </View>
 
+              {/* Pay toward debt — expense type only */}
+              {txType === 'expense' && (
+                <>
+                  <View style={styles.formRowSep} />
+                  <TouchableOpacity
+                    style={styles.formRow}
+                    onPress={() => setObligPickerVisible(true)}
+                    activeOpacity={0.7}
+                  >
+                    <View
+                      style={[
+                        styles.rowIconBox,
+                        {
+                          backgroundColor: selectedObligation
+                            ? theme.colors.dangerSubtle
+                            : theme.colors.bgPage,
+                        },
+                      ]}
+                    >
+                      <Ionicons
+                        name="receipt-outline"
+                        size={16}
+                        color={
+                          selectedObligation
+                            ? theme.colors.dangerMain
+                            : theme.colors.textSecondary
+                        }
+                      />
+                    </View>
+                    <Text
+                      style={selectedObligation ? styles.rowValue : styles.rowLabel}
+                      numberOfLines={1}
+                    >
+                      {selectedObligation ? selectedObligation.name : 'Pay toward debt (optional)'}
+                    </Text>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={16}
+                      color={theme.colors.textSecondary}
+                    />
+                  </TouchableOpacity>
+                </>
+              )}
+
             </View>{/* end formCard */}
 
             {/* ── Templates row ── */}
@@ -1240,6 +1312,13 @@ export default function QuickLogScreen({ route }: Props) {
         value={selectedDate}
         onConfirm={setSelectedDate}
         onClose={() => setDatePickerVisible(false)}
+      />
+
+      <ObligationPicker
+        visible={obligPickerVisible}
+        selectedId={selectedObligation?.id ?? null}
+        onSelect={setSelectedObligation}
+        onClose={() => setObligPickerVisible(false)}
       />
     </>
   );

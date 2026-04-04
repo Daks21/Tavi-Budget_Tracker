@@ -129,6 +129,7 @@ interface ObligationStore {
   loadObligations(): Promise<void>;
   addObligation(data: NewObligation): Promise<number>;
   markPaymentPaid(paymentId: number, accountId: number, amountPaid: number): Promise<void>;
+  applyPaymentToObligation(obligationId: number, amount: number, transactionId: number): Promise<void>;
   getUpcomingPayments(daysAhead: number): Promise<ObligationWithStatus[]>;
   getTotalMonthlyBurden(): Promise<number>;
   archiveObligation(id: number): Promise<void>;
@@ -296,6 +297,7 @@ const useObligationStore = create<ObligationStore>((set, get) => ({
       .update(obligations)
       .set({
         payments_made: obligation.payments_made + 1,
+        current_balance: (obligation.current_balance ?? obligation.principal_amount ?? 0) - amountPaid,
         updated_at: now,
       })
       .where(eq(obligations.id, obligation.id));
@@ -350,6 +352,104 @@ const useObligationStore = create<ObligationStore>((set, get) => ({
       .set({ is_active: 0, updated_at: nowISO() })
       .where(eq(obligations.id, id));
 
+    await get().loadObligations();
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // applyPaymentToObligation
+  //
+  // Called after an expense transaction is created to link it to a debt.
+  // Finds the next unpaid payment and either marks it as paid (if amount
+  // covers the full payment) or accumulates the partial payment.
+  //
+  // Logic:
+  // 1. Fetch obligation and all unpaid obligation_payments rows
+  // 2. Find nextPayment = earliest unpaid row
+  // 3. Calculate cumulative amount: nextPayment.amount_paid + incoming amount
+  // 4. If cumulative >= amount_due: mark as paid, increment payments_made
+  // 5. If cumulative < amount_due: accumulate amount_paid, keep is_paid=0
+  // 6. Always update obligation.current_balance by subtracting the payment
+  // 7. Reload to sync state
+  // ─────────────────────────────────────────────────────────────────────────
+  applyPaymentToObligation: async (obligationId, amount, transactionId) => {
+    const now = nowISO();
+    const today = todayStr();
+
+    const [obligation] = await db
+      .select()
+      .from(obligations)
+      .where(eq(obligations.id, obligationId))
+      .limit(1);
+
+    if (!obligation) throw new Error(`Obligation ${obligationId} not found`);
+
+    // Fetch all unpaid payments, sorted by scheduled_date ascending
+    const unPaidPayments = await db
+      .select()
+      .from(obligationPayments)
+      .where(
+        and(
+          eq(obligationPayments.obligation_id, obligationId),
+          eq(obligationPayments.is_paid, 0),
+        ),
+      )
+      .orderBy(asc(obligationPayments.scheduled_date));
+
+    if (unPaidPayments.length === 0) {
+      throw new Error(`No unpaid payments found for obligation ${obligationId}`);
+    }
+
+    const nextPayment = unPaidPayments[0];
+    const currentAccumulated = nextPayment.amount_paid ?? 0;
+    const newTotal = currentAccumulated + amount;
+
+    // Determine if this full-pays the obligation_payment or just accumulates
+    const isFullPayment = newTotal >= nextPayment.amount_due;
+
+    if (isFullPayment) {
+      // Mark payment as paid
+      await db
+        .update(obligationPayments)
+        .set({
+          is_paid: 1,
+          paid_date: today,
+          amount_paid: newTotal,
+          linked_transaction_id: transactionId,
+          updated_at: now,
+        })
+        .where(eq(obligationPayments.id, nextPayment.id));
+
+      // Increment payments_made on the obligation
+      await db
+        .update(obligations)
+        .set({
+          payments_made: obligation.payments_made + 1,
+          current_balance: (obligation.current_balance ?? obligation.principal_amount ?? 0) - amount,
+          updated_at: now,
+        })
+        .where(eq(obligations.id, obligationId));
+    } else {
+      // Partial payment: accumulate amount_paid
+      await db
+        .update(obligationPayments)
+        .set({
+          amount_paid: newTotal,
+          linked_transaction_id: transactionId,
+          updated_at: now,
+        })
+        .where(eq(obligationPayments.id, nextPayment.id));
+
+      // Update current_balance on the obligation (partial payment still reduces balance)
+      await db
+        .update(obligations)
+        .set({
+          current_balance: (obligation.current_balance ?? obligation.principal_amount ?? 0) - amount,
+          updated_at: now,
+        })
+        .where(eq(obligations.id, obligationId));
+    }
+
+    // Reload to sync Zustand state
     await get().loadObligations();
   },
 }));
