@@ -603,9 +603,10 @@ export default function QuickLogScreen({ route }: Props) {
   // ── Route params ───────────────────────────────────────────────────────────
   const prefillCategoryId = route.params?.prefillCategoryId;
   const prefillAccountId  = route.params?.prefillAccountId;
+  const prefillType       = route.params?.prefillType;
 
   // ── Local state ────────────────────────────────────────────────────────────
-  const [txType,              setTxType]              = useState<TxType>('expense');
+  const [txType,              setTxType]              = useState<TxType>(prefillType ?? 'expense');
   const [amount,              setAmount]              = useState('0');
   const [selectedCategory,    setSelectedCategory]    = useState<Category | null>(null);
   const [selectedAccountId,   setSelectedAccountId]   = useState<number | null>(prefillAccountId ?? null);

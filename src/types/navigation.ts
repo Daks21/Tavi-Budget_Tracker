@@ -9,8 +9,18 @@ export type OnboardingStackParamList = {
 export type RootTabParamList = {
   Home: undefined;
   Wallets: undefined;
-  Log: undefined;
-  Plan: undefined;
+  Log:
+    | {
+        screen: keyof LogStackParamList;
+        params?: LogStackParamList[keyof LogStackParamList];
+      }
+    | undefined;
+  Plan:
+    | {
+        screen: keyof PlanStackParamList;
+        params?: PlanStackParamList[keyof PlanStackParamList];
+      }
+    | undefined;
   More: undefined;
 };
 
@@ -24,7 +34,7 @@ export type WalletStackParamList = {
 };
 
 export type LogStackParamList = {
-  QuickLog: { prefillCategoryId?: number; prefillAccountId?: number };
+  QuickLog: { prefillCategoryId?: number; prefillAccountId?: number; prefillType?: 'income' | 'expense' | 'transfer' };
   BatchLog: undefined;
   TransactionHistory: undefined;
   TransactionDetail: { transactionId: number };
