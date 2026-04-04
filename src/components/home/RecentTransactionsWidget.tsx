@@ -14,7 +14,8 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTheme, type Theme } from '@/theme';
 import useTransactionStore from '@/store/useTransactionStore';
 import useBudgetStore from '@/store/useBudgetStore';
-import { formatCurrency } from '@/utils/formatCurrency';
+import usePrivacyMode from '@/hooks/usePrivacyMode';
+import { formatCurrency, formatBalanceDisplay } from '@/utils/formatCurrency';
 import type { RootTabParamList } from '@/types/navigation';
 import type { Transaction } from '@/db/schema';
 
@@ -75,6 +76,7 @@ export default function RecentTransactionsWidget() {
   const navigation = useNavigation<NavigationProp>();
   const { recentTransactions, isLoading, loadRecentTransactions } = useTransactionStore();
   const { categories } = useBudgetStore();
+  const { isPrivate } = usePrivacyMode();
 
   // Load recent transactions on mount
   useEffect(() => {
@@ -127,10 +129,12 @@ export default function RecentTransactionsWidget() {
         marginBottom: theme.spacing.md,
       },
       header: {
-        fontSize: theme.typography.fontSize.heading2,
-        lineHeight: theme.typography.lineHeight.heading2,
+        fontSize: theme.typography.fontSize.bodySmall,
+        lineHeight: theme.typography.lineHeight.bodySmall,
         fontFamily: theme.typography.fontFamily.semibold,
-        color: theme.colors.textPrimary,
+        color: theme.colors.textSecondary,
+        textTransform: 'uppercase',
+        letterSpacing: 0.5,
       },
       seeAllLink: {
         fontSize: theme.typography.fontSize.bodySmall,
@@ -231,7 +235,8 @@ export default function RecentTransactionsWidget() {
 
       {displayTransactions.map((tx, idx) => {
         const isLastRow = idx === displayTransactions.length - 1;
-        const amountLabel = getAmountLabel(tx);
+        const rawAmountLabel = getAmountLabel(tx);
+        const amountLabel = isPrivate ? formatBalanceDisplay(tx.amount, true) : rawAmountLabel;
         const amountColor = getAmountColor(tx, theme);
         const categoryName = getCategoryName(tx.category_id);
         const dateLabel = formatTransactionDate(tx.date);

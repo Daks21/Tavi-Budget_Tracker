@@ -86,10 +86,12 @@ export default function BudgetHealthWidget() {
         marginBottom: theme.spacing.md,
       },
       header: {
-        fontSize: theme.typography.fontSize.heading2,
-        lineHeight: theme.typography.lineHeight.heading2,
+        fontSize: theme.typography.fontSize.bodySmall,
+        lineHeight: theme.typography.lineHeight.bodySmall,
         fontFamily: theme.typography.fontFamily.semibold,
-        color: theme.colors.textPrimary,
+        color: theme.colors.textSecondary,
+        textTransform: 'uppercase',
+        letterSpacing: 0.5,
       },
       seeAllLink: {
         fontSize: theme.typography.fontSize.bodySmall,

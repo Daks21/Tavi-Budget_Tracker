@@ -10,7 +10,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { eq } from 'drizzle-orm';
 
 import type { RootTabParamList } from '@/types/navigation';
 import { useTheme } from '@/theme';
@@ -18,32 +22,76 @@ import useWalletStore from '@/store/useWalletStore';
 import useTransactionStore from '@/store/useTransactionStore';
 import useBudgetStore from '@/store/useBudgetStore';
 import useObligationStore from '@/store/useObligationStore';
+import db from '@/db';
+import { transactions } from '@/db/schema';
 
 import HomeHeader from '@/components/home/HomeHeader';
 import QuickActionsBar from '@/components/home/QuickActionsBar';
+import BackupPromptBanner from '@/components/home/BackupPromptBanner';
 import UpcomingObligationsWidget from '@/components/home/UpcomingObligationsWidget';
 import BudgetHealthWidget from '@/components/home/BudgetHealthWidget';
 import RecentTransactionsWidget from '@/components/home/RecentTransactionsWidget';
 
 type Props = BottomTabScreenProps<RootTabParamList, 'Home'>;
+type NavigationProp = NativeStackNavigationProp<any>;
+
+const BACKUP_PROMPT_DISMISSED_KEY = 'tavi_backup_prompt_dismissed';
+const BACKUP_PROMPT_DISMISSAL_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const LAST_BACKUP_DATE_KEY = 'tavi_last_backup';
 
 export default function HomeScreen(_props: Props) {
   const theme = useTheme();
+  const navigation = useNavigation<NavigationProp>();
 
   // Store hooks
   const { loadAccounts } = useWalletStore();
-  const { loadRecentTransactions, recentTransactions } = useTransactionStore();
+  const { loadRecentTransactions, recentTransactions, allTransactions } = useTransactionStore();
   const { getBudgetProgress } = useBudgetStore();
   const { loadObligations, upcomingPayments } = useObligationStore();
 
   // Local state
   const [isLoading, setIsLoading] = useState(true);
   const [budgetProgress, setBudgetProgress] = useState<any[]>([]);
+  const [showBackupPrompt, setShowBackupPrompt] = useState(false);
+  const [transactionCount, setTransactionCount] = useState(0);
 
   // Get current month and year
   const now = new Date();
   const currentMonth = now.getMonth() + 1;
   const currentYear = now.getFullYear();
+
+  // Helper: Check if backup prompt should be shown
+  const checkBackupPromptVisibility = useCallback(async (count: number) => {
+    try {
+      // Check if prompt was recently dismissed
+      const dismissedTimestamp = await AsyncStorage.getItem(BACKUP_PROMPT_DISMISSED_KEY);
+      if (dismissedTimestamp) {
+        const dismissedTime = parseInt(dismissedTimestamp, 10);
+        const now = Date.now();
+        if (now - dismissedTime < BACKUP_PROMPT_DISMISSAL_DURATION_MS) {
+          setShowBackupPrompt(false);
+          return;
+        }
+      }
+
+      // Check if a backup exists
+      const lastBackupDate = await AsyncStorage.getItem(LAST_BACKUP_DATE_KEY);
+      if (lastBackupDate) {
+        setShowBackupPrompt(false);
+        return;
+      }
+
+      // Show prompt if transaction count >= 10
+      if (count >= 10) {
+        setShowBackupPrompt(true);
+      } else {
+        setShowBackupPrompt(false);
+      }
+    } catch (error) {
+      console.error('Error checking backup prompt visibility:', error);
+      setShowBackupPrompt(false);
+    }
+  }, []);
 
   // Load all data in parallel
   const loadAllData = useCallback(async () => {
@@ -56,12 +104,21 @@ export default function HomeScreen(_props: Props) {
         loadObligations(),
       ]);
       setBudgetProgress(budgets);
+
+      // Get total transaction count from database
+      const txnRows = await db
+        .select()
+        .from(transactions)
+        .where(eq(transactions.is_deleted, 0));
+      const count = txnRows.length;
+      setTransactionCount(count);
+      await checkBackupPromptVisibility(count);
     } catch (error) {
       console.error('Error loading home screen data:', error);
     } finally {
       setIsLoading(false);
     }
-  }, [loadAccounts, loadRecentTransactions, getBudgetProgress, loadObligations, currentMonth, currentYear]);
+  }, [loadAccounts, loadRecentTransactions, getBudgetProgress, loadObligations, currentMonth, currentYear, checkBackupPromptVisibility]);
 
   // Load on mount
   React.useEffect(() => {
@@ -74,6 +131,23 @@ export default function HomeScreen(_props: Props) {
       loadAllData();
     }, [loadAllData])
   );
+
+  // Handle backup prompt actions
+  const handleBackUpNow = useCallback(() => {
+    navigation.navigate('More', { screen: 'BackupRestore' });
+  }, [navigation]);
+
+  const handleDismissBackupPrompt = useCallback(async () => {
+    try {
+      await AsyncStorage.setItem(
+        BACKUP_PROMPT_DISMISSED_KEY,
+        Date.now().toString()
+      );
+      setShowBackupPrompt(false);
+    } catch (error) {
+      console.error('Error dismissing backup prompt:', error);
+    }
+  }, []);
 
   // Determine visibility
   const hasObligations = upcomingPayments.length > 0;
@@ -155,6 +229,13 @@ export default function HomeScreen(_props: Props) {
           {/* Quick Actions Bar — always shown */}
           <QuickActionsBar />
 
+          {/* Backup Prompt Banner — shown when conditions are met */}
+          <BackupPromptBanner
+            visible={showBackupPrompt}
+            onBackUpNow={handleBackUpNow}
+            onDismiss={handleDismissBackupPrompt}
+          />
+
           {/* First-launch empty state — only shown if no obligations, budgets, or transactions */}
           {isFirstLaunch ? (
             <View style={dynamicStyles.emptyStateContainer}>
@@ -164,6 +245,7 @@ export default function HomeScreen(_props: Props) {
               <Text style={dynamicStyles.emptyStateText}>
                 Start by logging your first expense or setting a budget.
               </Text>
+              <QuickActionsBar />
             </View>
           ) : (
             <>

@@ -17,7 +17,7 @@ import usePrivacyMode from '@/hooks/usePrivacyMode';
 import db from '@/db';
 import { userProfile } from '@/db/schema';
 import { getTotalPersonalBalance, getMonthlyIncome } from '@/utils/calculations';
-import { formatBalanceDisplay } from '@/utils/formatCurrency';
+import { formatBalanceDisplay, formatCurrency } from '@/utils/formatCurrency';
 
 type NavigationProp = NativeStackNavigationProp<any>;
 
@@ -238,11 +238,7 @@ export default function HomeHeader() {
           },
         ]}
       >
-        Income this month: ₱
-        {monthlyIncome.toLocaleString('en-PH', {
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        })}
+        Income this month: {formatCurrency(monthlyIncome)}
       </Text>
     );
   };

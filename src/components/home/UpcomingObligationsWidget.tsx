@@ -74,10 +74,12 @@ export default function UpcomingObligationsWidget() {
         paddingVertical: theme.spacing.lg,
       },
       header: {
-        fontSize: theme.typography.fontSize.heading2,
-        lineHeight: theme.typography.lineHeight.heading2,
+        fontSize: theme.typography.fontSize.bodySmall,
+        lineHeight: theme.typography.lineHeight.bodySmall,
         fontFamily: theme.typography.fontFamily.semibold,
-        color: theme.colors.textPrimary,
+        color: theme.colors.textSecondary,
+        textTransform: 'uppercase',
+        letterSpacing: 0.5,
         marginBottom: theme.spacing.md,
       },
       emptyText: {
